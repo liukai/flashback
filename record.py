@@ -113,7 +113,7 @@ class MongoQueryRecorder:
 
 def main():
     """Recording the inbound traffic for a database."""
-    db_config = config.CONFIG
+    db_config = config.DB_CONFIG
     recorder = MongoQueryRecorder(db_config)
     recorder.record_profiler(now_in_utc_secs())
 
