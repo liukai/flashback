@@ -9,53 +9,13 @@ import Queue
 import config
 import constants
 import pickle
-import pymongo
 import time
 import utils
 
 
-def now_in_utc_secs():
-    """Get current time in seconds since UTC epoch"""
-    return int(time.time())
-
-
-def create_tailing_cursor(collection, criteria):
-    """Create a cursor that constantly tail the latest documents from the
-       database"""
-    return collection.find(criteria, slave_okay=True, tailable=True)
-
-
-def get_start_time(collection):
-    """Get the latest element's timestamp from a collection with "ts" field"""
-    result = collection.find().limit(1).sort([("ts", pymongo.DESCENDING)])
-    try:
-        return result.next()["ts"]
-    except StopIteration:
-        return None
-
-
-def unpickle(input_file):
-    """Safely unpack entry from the file"""
-    try:
-        return pickle.load(input_file)
-    except EOFError:
-        return None
-
-
-def unpickle_iterator(filename):
-    """Return the unpickled objects as a sequence of objects"""
-    f = open(filename)
-    while True:
-        result = unpickle(f)
-        if result:
-            yield result
-        else:
-            raise StopIteration
-
-
 def _test_final_output(filename):
     """Just for test: help the manual check of the final output"""
-    for i, doc in enumerate(unpickle_iterator(filename)):
+    for i, doc in enumerate(utils.unpickle_iterator(filename)):
         print i, ":", doc
 
 
@@ -75,8 +35,8 @@ def complete_insert_ops(oplog_output_file, profiler_output_file, output_file):
     logger = utils.LOG
 
     logger.info("Starts completing the insert options")
-    oplog_doc = unpickle(oplog)
-    profiler_doc = unpickle(profiler)
+    oplog_doc = utils.unpickle(oplog)
+    profiler_doc = utils.unpickle(profiler)
     inserts = 0
     noninserts = 0
 
@@ -84,7 +44,7 @@ def complete_insert_ops(oplog_output_file, profiler_output_file, output_file):
         if profiler_doc["op"] != "insert":
             pickle.dump(profiler_doc, output)
             noninserts += 1
-            profiler_doc = unpickle(profiler)
+            profiler_doc = utils.unpickle(profiler)
         else:
             # Replace the the profiler's insert operation doc with oplog's,
             # but keeping the canonical form of "ts".
@@ -105,13 +65,13 @@ def complete_insert_ops(oplog_output_file, profiler_output_file, output_file):
             oplog_doc["op"] = profiler_doc["op"]
             pickle.dump(oplog_doc, output)
             inserts += 1
-            oplog_doc = unpickle(oplog)
-            profiler_doc = unpickle(profiler)
+            oplog_doc = utils.unpickle(oplog)
+            profiler_doc = utils.unpickle(profiler)
 
     while profiler_doc:
         pickle.dump(profiler_doc, output)
         noninserts += 1
-        profiler_doc = unpickle(profiler)
+        profiler_doc = utils.unpickle(profiler)
 
     logger.info("Finished completing the insert options, %d inserts and"
                 " %d noninserts", inserts, noninserts)
@@ -208,7 +168,7 @@ class MongoQueryRecorder(object):
             self.oplog_client[constants.LOCAL_DB][constants.OPLOG_COLLECTION]
         criteria = {"op": "i", "ts": {"$gte": start_time}}
 
-        return create_tailing_cursor(oplog_collection, criteria)
+        return utils.create_tailing_cursor(oplog_collection, criteria)
 
     def get_profiler_tailor(self, start_time):
         """Start recording the profiler entries"""
@@ -228,12 +188,12 @@ class MongoQueryRecorder(object):
             "ts":  {"$gte": start_time}
         }
 
-        return create_tailing_cursor(profiler_collection, criteria)
+        return utils.create_tailing_cursor(profiler_collection, criteria)
 
     def record(self):
         """record the activities in the multithreading way"""
-        start_time = now_in_utc_secs()
-        end_time = now_in_utc_secs() + self.config["duration_secs"]
+        start_time = utils.now_in_utc_secs()
+        end_time = utils.now_in_utc_secs() + self.config["duration_secs"]
 
         doc_queue = Queue.Queue()
         state = MongoQueryRecorder. RecordingState()
@@ -268,7 +228,7 @@ class MongoQueryRecorder(object):
             thread.start()
 
         # Processing for a time range
-        while now_in_utc_secs() < end_time:
+        while utils.now_in_utc_secs() < end_time:
             MongoQueryRecorder._report_status(state)
             time.sleep(5)
         MongoQueryRecorder._report_status(state)
