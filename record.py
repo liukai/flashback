@@ -111,8 +111,11 @@ class MongoQueryRecorder(object):
             # Logically, any element in the lists below will be accessed by
             # one and only one thread, thus we don't use any lock to ensure
             # the consistency.
+            # TODO(kailiu): too many 2-element list. Please make this look
+            # better.
             self.entries_received = [0] * 2
             self.entries_written = [0] * 2
+            self.alive = [True] * 2
 
     def __init__(self, db_config):
         self.config = db_config
@@ -143,6 +146,9 @@ class MongoQueryRecorder(object):
             except Queue.Empty:
                 # gets nothing after timeout
                 continue
+        for f in files:
+            f.flush()
+        utils.LOG.info("All received docs are processed!")
 
     @staticmethod
     def _tail_to_queue(tailor, identifier, doc_queue, state,
@@ -162,6 +168,7 @@ class MongoQueryRecorder(object):
                 state.entries_received[identifier] += 1
             except StopIteration:
                 time.sleep(check_duration_secs)
+        utils.LOG.info("source #%d: Tailing to queue completed!", identifier)
 
     @staticmethod
     def _report_status(state):
@@ -221,38 +228,57 @@ class MongoQueryRecorder(object):
         ]
 
         # Create background threads to handle to track/dump mongodb activities
-        threads = []
+        thread_info_list = []
         # Writer thread, we only have one writer since we assume all files will
         # be written to the same device (disk or SSD), as a result it yields
         # not much benefit to have multiple writers.
-        threads.append(Thread(
-            target=MongoQueryRecorder._process_doc_queue,
-            args=(doc_queue, files, state)
-        ))
-        threads.append(Thread(
+        thread_info_list.append({
+            "name": "write-all-docs-to-file",
+            "thread": Thread(
+                target=MongoQueryRecorder._process_doc_queue,
+                args=(doc_queue, files, state))
+        })
+        thread_info_list.append({
+            "name": "tailing-oplogs",
+            "thread": Thread(
             target=MongoQueryRecorder._tail_to_queue,
             args=(self.get_oplog_tailor(Timestamp(start_time, 0)),
-                  0, doc_queue, state)
-        ))
+                  0, doc_queue, state))
+        })
+
         start_datetime = datetime.utcfromtimestamp(start_time)
-        threads.append(Thread(
+        thread_info_list.append({
+            "name": "tailing-profiler",
+            "thread": Thread(
             target=MongoQueryRecorder._tail_to_queue,
             args=(self.get_profiler_tailor(start_datetime),
-                  1, doc_queue, state)
-        ))
+                  1, doc_queue, state))
+        })
 
-        for thread in threads:
-            thread.start()
+        for thread_info in thread_info_list:
+            utils.LOG.info("Starting thread: %s", thread_info["name"])
+            thread_info["thread"].setDaemon(True)
+            thread_info["thread"].start()
 
         # Processing for a time range
-        while utils.now_in_utc_secs() < end_time:
+        while all(state.alive) and utils.now_in_utc_secs() < end_time:
             MongoQueryRecorder._report_status(state)
             time.sleep(5)
         MongoQueryRecorder._report_status(state)
 
         state.processing = False
-        for thread in threads:
-            thread.join()
+        for thread_info in thread_info_list:
+            utils.LOG.info(
+                "Waiting for thread: %s to finish", thread_info["name"])
+            thread = thread_info["thread"]
+            name = thread_info["name"]
+            thread.join(5)
+            if thread.is_alive():
+                utils.LOG.error(
+                    "Thread %s didn't exit successfully. Skip it.", name)
+            else:
+                utils.LOG.error("Thread %s exits normally.", name)
+        utils.LOG.info("Preliminary recording completed!")
 
         for f in files:
             f.close()
@@ -268,7 +294,7 @@ def main():
     db_config = config.DB_CONFIG
     recorder = MongoQueryRecorder(db_config)
     recorder.record()
-    _test_final_output(db_config["output_file"])
+    # _test_final_output(db_config["output_file"])
 
 if __name__ == '__main__':
     main()
