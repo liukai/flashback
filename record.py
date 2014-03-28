@@ -19,6 +19,21 @@ def _test_final_output(filename):
         print i, ":", doc
 
 
+def make_ns_selector(database, target_collections):
+    system_collections = \
+        set([constants.PROFILER_COLLECTION, constants.INDEX_COLLECTION])
+
+    if target_collections is not None:
+        target_collections -= system_collections
+
+    if target_collections is not None and len(target_collections) > 0:
+        return {"$in": ["{0}.{1}".format(database, coll)
+                for coll in target_collections]}
+    else:
+        return {"$nin": ["{0}.{1}".format(database, coll)
+                for coll in system_collections]}
+
+
 def complete_insert_ops(oplog_output_file, profiler_output_file, output_file):
     """
     * Why merge files:
@@ -101,6 +116,10 @@ class MongoQueryRecorder(object):
 
     def __init__(self, db_config):
         self.config = db_config
+        # sanitize the options
+        if self.config["target_collections"] is not None:
+            self.config["target_collections"] = set(
+                [coll.strip() for coll in self.config["target_collections"]])
 
         oplog_server = self.config["oplog_server"]
         profiler_server = self.config["profiler_server"]
@@ -166,7 +185,12 @@ class MongoQueryRecorder(object):
         """
         oplog_collection = \
             self.oplog_client[constants.LOCAL_DB][constants.OPLOG_COLLECTION]
-        criteria = {"op": "i", "ts": {"$gte": start_time}}
+        criteria = {
+            "op": "i",
+            "ts": {"$gte": start_time},
+            "ns": make_ns_selector(self.config["target_database"],
+                                   self.config["target_collections"])
+        }
 
         return utils.create_tailing_cursor(oplog_collection, criteria)
 
@@ -175,17 +199,10 @@ class MongoQueryRecorder(object):
         profiler_collection = \
             self.profiler_client[self.config["target_database"]] \
                                 [constants.PROFILER_COLLECTION]
-        # ignore the inserts
-        profiler_namespace = "{0}.{1}".format(
-            self.config["target_database"],
-            constants.PROFILER_COLLECTION)
-        index_namespace = "{0}.{1}".format(
-            self.config["target_database"],
-            constants.INDEX_COLLECTION)
-
         criteria = {
-            "ns": {"$nin": [profiler_namespace, index_namespace]},
-            "ts":  {"$gte": start_time}
+            "ns": make_ns_selector(self.config["target_database"],
+                                   self.config["target_collections"]),
+            "ts": {"$gte": start_time}
         }
 
         return utils.create_tailing_cursor(profiler_collection, criteria)
