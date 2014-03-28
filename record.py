@@ -168,10 +168,10 @@ class MongoQueryRecorder(object):
         """report current processing status"""
         msgs = []
         for idx, source in enumerate(["<oplog>", "<profiler>"]):
-            msg = "{0}: received {1} entries, {2} of them were written". \
+            msg = "\n\t{0}: received {1} entries, {2} of them were written". \
                   format(source,
                          state.entries_received[idx],
-                         state.entries_received[idx])
+                         state.entries_written[idx])
             msgs.append(msg)
 
         utils.LOG.info("; ".join(msgs))
