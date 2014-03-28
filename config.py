@@ -18,8 +18,9 @@ DB_CONFIG = {
         "host": "localhost",
         "port": 27017,
     },
-    "oplog_output_file": "./oplog_output_file",
-    "profiler_output_file": "./profiler_output",
+    "oplog_output_file": "./OPLOG_OUTPUT",
+    "profiler_output_file": "./PROFILER_OUTPUT",
+    "output_file": "./OUTPUT",
     "duration_secs": 30
 }
 

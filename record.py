@@ -3,6 +3,8 @@ r""" Track the MongoDB activities by tailing oplog and profiler output"""
 
 from pymongo import MongoClient
 from threading import Thread
+from datetime import datetime
+from bson.timestamp import Timestamp
 import Queue
 import config
 import constants
@@ -30,6 +32,93 @@ def get_start_time(collection):
         return result.next()["ts"]
     except StopIteration:
         return None
+
+
+def unpickle(input_file):
+    """Safely unpack entry from the file"""
+    try:
+        return pickle.load(input_file)
+    except EOFError:
+        return None
+
+
+def unpickle_iterator(filename):
+    """Return the unpickled objects as a sequence of objects"""
+    f = open(filename)
+    while True:
+        result = unpickle(f)
+        if result:
+            yield result
+        else:
+            raise StopIteration
+
+
+def _test_final_output(filename):
+    """Just for test: help the manual check of the final output"""
+    for i, doc in enumerate(unpickle_iterator(filename)):
+        print i, ":", doc
+
+
+def complete_insert_ops(oplog_output_file, profiler_output_file, output_file):
+    """
+    * Why merge files:
+        we need to merge the docs from two sources into one.
+    * Why not merge earlier:
+        It's definitely inefficient to merge the entries when we just retrieve
+        these documents from mongodb. However we designed this script to be able
+        to pull the docs from differnt servers, as a result it's hard to do the
+        on-time merge since you cannot determine if some "old" entries will come
+        later. """
+    oplog = open(oplog_output_file, "rb")
+    profiler = open(profiler_output_file, "rb")
+    output = open(output_file, "wb")
+    logger = utils.LOG
+
+    logger.info("Starts completing the insert options")
+    oplog_doc = unpickle(oplog)
+    profiler_doc = unpickle(profiler)
+    inserts = 0
+    noninserts = 0
+
+    while oplog_doc and profiler_doc:
+        if profiler_doc["op"] != "insert":
+            pickle.dump(profiler_doc, output)
+            noninserts += 1
+            profiler_doc = unpickle(profiler)
+        else:
+            # Replace the the profiler's insert operation doc with oplog's,
+            # but keeping the canonical form of "ts".
+            profiler_ts = profiler_doc["ts"]
+            oplog_ts = oplog_doc["ts"].as_datetime()
+            # only care about the second-level precision.
+            if profiler_ts.timetuple()[:6] != oplog_ts.timetuple()[:6]:
+                # TODO strictly speaking, this ain't good since the files are
+                # not propertly closed.
+                logger.error(
+                    "oplog and profiler results are inconsitent `ts`\n"
+                    "  oplog:    %s\n"
+                    "  profiler: %s", str(oplog_doc), str(profiler_doc))
+                return False
+
+            oplog_doc["ts"] = profiler_doc["ts"]
+            # make sure "op" is "insert" instead of "i".
+            oplog_doc["op"] = profiler_doc["op"]
+            pickle.dump(oplog_doc, output)
+            inserts += 1
+            oplog_doc = unpickle(oplog)
+            profiler_doc = unpickle(profiler)
+
+    while profiler_doc:
+        pickle.dump(profiler_doc, output)
+        noninserts += 1
+        profiler_doc = unpickle(profiler)
+
+    logger.info("Finished completing the insert options, %d inserts and"
+                " %d noninserts", inserts, noninserts)
+    for f in [oplog, profiler, output]:
+        f.close()
+
+    return True
 
 
 class MongoQueryRecorder(object):
@@ -108,7 +197,7 @@ class MongoQueryRecorder(object):
 
         utils.LOG.info("; ".join(msgs))
 
-    def get_oplog_tailor(self):
+    def get_oplog_tailor(self, start_time):
         """Start recording the oplog entries starting from now.
         We only care about "insert" operations since all other queries will
         be captured by mongodb profiler.
@@ -117,19 +206,15 @@ class MongoQueryRecorder(object):
         """
         oplog_collection = \
             self.oplog_client[constants.LOCAL_DB][constants.OPLOG_COLLECTION]
-        start_time = get_start_time(oplog_collection)
-        criteria = {"op": "i"}
-        if start_time:
-            criteria["ts"] = {"$gt": start_time}
+        criteria = {"op": "i", "ts": {"$gte": start_time}}
 
         return create_tailing_cursor(oplog_collection, criteria)
 
-    def get_profiler_tailor(self):
+    def get_profiler_tailor(self, start_time):
         """Start recording the profiler entries"""
         profiler_collection = \
             self.profiler_client[self.config["target_database"]] \
                                 [constants.PROFILER_COLLECTION]
-        start_time = get_start_time(profiler_collection)
         # ignore the inserts
         profiler_namespace = "{0}.{1}".format(
             self.config["target_database"],
@@ -138,18 +223,16 @@ class MongoQueryRecorder(object):
             self.config["target_database"],
             constants.INDEX_COLLECTION)
 
-        print [profiler_namespace, index_namespace]
         criteria = {
-            "op": {"$ne": "insert"},
-            "ns": {"$nin": [profiler_namespace, index_namespace]}
+            "ns": {"$nin": [profiler_namespace, index_namespace]},
+            "ts":  {"$gte": start_time}
         }
-        if start_time:
-            criteria["ts"] = {"$gt": start_time}
 
         return create_tailing_cursor(profiler_collection, criteria)
 
-    def start_recording(self):
+    def record(self):
         """record the activities in the multithreading way"""
+        start_time = now_in_utc_secs()
         end_time = now_in_utc_secs() + self.config["duration_secs"]
 
         doc_queue = Queue.Queue()
@@ -171,11 +254,14 @@ class MongoQueryRecorder(object):
         ))
         threads.append(Thread(
             target=MongoQueryRecorder._tail_to_queue,
-            args=(self.get_oplog_tailor(), 0, doc_queue, state)
+            args=(self.get_oplog_tailor(Timestamp(start_time, 0)),
+                  0, doc_queue, state)
         ))
+        start_datetime = datetime.utcfromtimestamp(start_time)
         threads.append(Thread(
             target=MongoQueryRecorder._tail_to_queue,
-            args=(self.get_profiler_tailor(), 1, doc_queue, state)
+            args=(self.get_profiler_tailor(start_datetime),
+                  1, doc_queue, state)
         ))
 
         for thread in threads:
@@ -191,12 +277,21 @@ class MongoQueryRecorder(object):
         for thread in threads:
             thread.join()
 
+        for f in files:
+            f.close()
+
+        # Final step
+        complete_insert_ops(self.config["oplog_output_file"],
+                            self.config["profiler_output_file"],
+                            self.config["output_file"])
+
 
 def main():
     """Recording the inbound traffic for a database."""
     db_config = config.DB_CONFIG
     recorder = MongoQueryRecorder(db_config)
-    recorder.start_recording()
+    recorder.record()
+    _test_final_output(db_config["output_file"])
 
 if __name__ == '__main__':
     main()

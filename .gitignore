@@ -1,3 +1,4 @@
 *.pyc
-profiler_output
-oplog_output_file
+PROFILER_OUTPUT
+OPLOG_OUTPUT
+OUTPUT
