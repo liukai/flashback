@@ -9,6 +9,7 @@ import config
 import constants
 import pickle
 import Queue
+import threading
 import time
 import utils
 
@@ -281,13 +282,15 @@ class MongoQueryRecorder(object):
             utils.LOG.info("Starting thread: %s", thread_info["name"])
             thread_info["thread"].setDaemon(True)
             thread_info["thread"].start()
+        MongoQueryRecorder._report_status(state)
+        timer_thread = threading.Timer(5, MongoQueryRecorder._report_status,
+                                       [state])
+        timer_thread.start()
 
         # Processing for a time range
         while all(s.alive for s in state.tailor_states) \
                 and (utils.now_in_utc_secs() < end_time):
-            MongoQueryRecorder._report_status(state)
-            time.sleep(5)
-        MongoQueryRecorder._report_status(state)
+            time.sleep(1)
 
         state.timeout = True
         for thread_info in thread_info_list:
@@ -308,6 +311,8 @@ class MongoQueryRecorder(object):
                     thread.join(wait_secs)
                 else:
                     utils.LOG.info("Thread %s exits normally.", name)
+        timer_thread.cancel()
+        MongoQueryRecorder._report_status(state)
         utils.LOG.info("Preliminary recording completed!")
 
         for f in files:
