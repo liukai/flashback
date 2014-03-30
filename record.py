@@ -1,14 +1,14 @@
 #!/usr/bin/python
 r""" Track the MongoDB activities by tailing oplog and profiler output"""
 
+from bson.timestamp import Timestamp
+from datetime import datetime
 from pymongo import MongoClient
 from threading import Thread
-from datetime import datetime
-from bson.timestamp import Timestamp
-import Queue
 import config
 import constants
 import pickle
+import Queue
 import time
 import utils
 
@@ -101,21 +101,29 @@ class MongoQueryRecorder(object):
     """Record MongoDB database's activities by polling the oplog and profiler
     results"""
 
+    OPLOG = 0
+    PROFILER = 1
+
     class RecordingState(object):
 
         """Keeps the running status of a recording request"""
 
+        @staticmethod
+        def make_tailor_state():
+            """Return the tailor state "struct" """
+            s = utils.EmptyClass()
+            s.entries_received = 0
+            s. entries_written = 0
+            s. alive = True
+            return s
+
         def __init__(self):
             self.processing = True
-            # hardcode 2 entry counts for oplog and profiler results.
-            # Logically, any element in the lists below will be accessed by
-            # one and only one thread, thus we don't use any lock to ensure
-            # the consistency.
-            # TODO(kailiu): too many 2-element list. Please make this look
-            # better.
-            self.entries_received = [0] * 2
-            self.entries_written = [0] * 2
-            self.alive = [True] * 2
+
+            self.tailor_states = [
+                self.make_tailor_state(),
+                self.make_tailor_state(),
+            ]
 
     def __init__(self, db_config):
         self.config = db_config
@@ -141,7 +149,7 @@ class MongoQueryRecorder(object):
         while state.processing:
             try:
                 index, doc = doc_queue.get(block=True, timeout=1)
-                state.entries_written[index] += 1
+                state.tailor_states[index].entries_written += 1
                 pickle.dump(doc, files[index])
             except Queue.Empty:
                 # gets nothing after timeout
@@ -165,7 +173,7 @@ class MongoQueryRecorder(object):
             try:
                 doc = tailor.next()
                 doc_queue.put_nowait((identifier, doc))
-                state.entries_received[identifier] += 1
+                state.tailor_states[identifier].entries_received += 1
             except StopIteration:
                 time.sleep(check_duration_secs)
         utils.LOG.info("source #%d: Tailing to queue completed!", identifier)
@@ -177,8 +185,8 @@ class MongoQueryRecorder(object):
         for idx, source in enumerate(["<oplog>", "<profiler>"]):
             msg = "\n\t{0}: received {1} entries, {2} of them were written". \
                   format(source,
-                         state.entries_received[idx],
-                         state.entries_written[idx])
+                         state.tailor_states[idx].entries_received,
+                         state.tailor_states[idx].entries_written)
             msgs.append(msg)
 
         utils.LOG.info("; ".join(msgs))
@@ -243,7 +251,7 @@ class MongoQueryRecorder(object):
             "thread": Thread(
             target=MongoQueryRecorder._tail_to_queue,
             args=(self.get_oplog_tailor(Timestamp(start_time, 0)),
-                  0, doc_queue, state))
+                  MongoQueryRecorder.OPLOG, doc_queue, state))
         })
 
         start_datetime = datetime.utcfromtimestamp(start_time)
@@ -252,7 +260,7 @@ class MongoQueryRecorder(object):
             "thread": Thread(
             target=MongoQueryRecorder._tail_to_queue,
             args=(self.get_profiler_tailor(start_datetime),
-                  1, doc_queue, state))
+                  MongoQueryRecorder.PROFILER, doc_queue, state))
         })
 
         for thread_info in thread_info_list:
@@ -261,7 +269,8 @@ class MongoQueryRecorder(object):
             thread_info["thread"].start()
 
         # Processing for a time range
-        while all(state.alive) and utils.now_in_utc_secs() < end_time:
+        while all(s.alive for s in state.tailor_states) \
+                and (utils.now_in_utc_secs() < end_time):
             MongoQueryRecorder._report_status(state)
             time.sleep(5)
         MongoQueryRecorder._report_status(state)
@@ -272,12 +281,18 @@ class MongoQueryRecorder(object):
                 "Waiting for thread: %s to finish", thread_info["name"])
             thread = thread_info["thread"]
             name = thread_info["name"]
-            thread.join(5)
-            if thread.is_alive():
-                utils.LOG.error(
-                    "Thread %s didn't exit successfully. Skip it.", name)
-            else:
-                utils.LOG.error("Thread %s exits normally.", name)
+            # Idempotently wait for thread
+            wait_secs = 5
+            while thread.is_alive():
+                thread.join(wait_secs)
+                if thread.is_alive():
+                    utils.LOG.error(
+                        "Thread %s didn't exit after %d seconds. Will wait for "
+                        "another %d seconds", name, wait_secs, 2 * wait_secs)
+                    wait_secs *= 2
+                    thread.join(wait_secs)
+                else:
+                    utils.LOG.info("Thread %s exits normally.", name)
         utils.LOG.info("Preliminary recording completed!")
 
         for f in files:

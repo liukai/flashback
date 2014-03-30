@@ -61,3 +61,7 @@ def get_start_time(collection):
         return result.next()["ts"]
     except StopIteration:
         return None
+
+class EmptyClass(object):
+
+    """Empty class"""
