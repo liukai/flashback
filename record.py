@@ -55,8 +55,13 @@ def complete_insert_ops(oplog_output_file, profiler_output_file, output_file):
     profiler_doc = utils.unpickle(profiler)
     inserts = 0
     noninserts = 0
+    severe_inconsistencies = 0
+    mild_inconsistencies = 0
 
     while oplog_doc and profiler_doc:
+        if (noninserts + inserts) % 2500 == 0:
+            logger.info("processed %d items", noninserts + inserts)
+
         if profiler_doc["op"] != "insert":
             pickle.dump(profiler_doc, output)
             noninserts += 1
@@ -64,17 +69,24 @@ def complete_insert_ops(oplog_output_file, profiler_output_file, output_file):
         else:
             # Replace the the profiler's insert operation doc with oplog's,
             # but keeping the canonical form of "ts".
-            profiler_ts = profiler_doc["ts"]
+            profiler_ts = int(profiler_doc["ts"].strftime("%s"))
             oplog_ts = oplog_doc["ts"].as_datetime()
             # only care about the second-level precision.
-            if profiler_ts.timetuple()[:6] != oplog_ts.timetuple()[:6]:
+            # TODO(kailiu) lame enforcement of consistency
+            delta = abs(profiler_ts - oplog_ts)
+            if delta > 3:
                 # TODO strictly speaking, this ain't good since the files are
                 # not propertly closed.
                 logger.error(
-                    "oplog and profiler results are inconsitent `ts`\n"
+                    "oplog and profiler results are inconsistent `ts`\n"
                     "  oplog:    %s\n"
                     "  profiler: %s", str(oplog_doc), str(profiler_doc))
-                return False
+                severe_inconsistencies += 1
+            elif delta != 0:
+                logger.warn("Slightly inconsistent timestamp\n"
+                            "  oplog:   %d\n"
+                            "  profiler %d", oplog_ts, profiler_ts)
+                mild_inconsistencies += 1
 
             oplog_doc["ts"] = profiler_doc["ts"]
             # make sure "op" is "insert" instead of "i".
@@ -90,7 +102,10 @@ def complete_insert_ops(oplog_output_file, profiler_output_file, output_file):
         profiler_doc = utils.unpickle(profiler)
 
     logger.info("Finished completing the insert options, %d inserts and"
-                " %d noninserts", inserts, noninserts)
+                " %d noninserts\n"
+                "  severe ts incosistencies: %d\n"
+                "  mild ts incosistencies: %d\n", inserts, noninserts,
+                severe_inconsistencies, mild_inconsistencies)
     for f in [oplog, profiler, output]:
         f.close()
 
