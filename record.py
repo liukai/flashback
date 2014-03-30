@@ -119,7 +119,7 @@ class MongoQueryRecorder(object):
             return s
 
         def __init__(self):
-            self.processing = True
+            self.timeout = False
 
             self.tailor_states = [
                 self.make_tailor_state(),
@@ -147,7 +147,7 @@ class MongoQueryRecorder(object):
     @staticmethod
     def _process_doc_queue(doc_queue, files, state):
         """Writes the incoming docs to the corresponding files"""
-        while state.processing:
+        while not state.timeout:
             try:
                 index, doc = doc_queue.get(block=True, timeout=1)
                 state.tailor_states[index].entries_written += 1
@@ -160,7 +160,7 @@ class MongoQueryRecorder(object):
         utils.LOG.info("All received docs are processed!")
 
     @staticmethod
-    def _tail_to_queue(tailor, identifier, doc_queue, state,
+    def _tail_to_queue(tailor, identifier, doc_queue, state, end_time,
                        check_duration_secs=1):
         """Accepts a tailing cursor and serialize the retrieved documents to a
         fifo queue
@@ -170,12 +170,20 @@ class MongoQueryRecorder(object):
         @param check_duration_secs: if we cannot retrieve the latest document,
             it will sleep for a period of time and then try again.
         """
-        while tailor.alive and state.processing:
+        tailor_state = state.tailor_states[identifier]
+        while tailor.alive:
             try:
                 doc = tailor.next()
+                tailor_state.last_ts = doc["ts"]
+                if state.timeout and (tailor_state.last_ts is None or
+                                      tailor_state.last_ts >= end_time):
+                    break
+
                 doc_queue.put_nowait((identifier, doc))
-                state.tailor_states[identifier].entries_received += 1
+                tailor_state.entries_received += 1
             except StopIteration:
+                if state.timeout:
+                    break
                 time.sleep(check_duration_secs)
         utils.LOG.info("source #%d: Tailing to queue completed!", identifier)
 
@@ -255,16 +263,18 @@ class MongoQueryRecorder(object):
             "thread": Thread(
             target=MongoQueryRecorder._tail_to_queue,
             args=(self.get_oplog_tailor(Timestamp(start_time, 0)),
-                  MongoQueryRecorder.OPLOG, doc_queue, state))
+                  MongoQueryRecorder.OPLOG, doc_queue, state,
+                  Timestamp(end_time, 0)))
         })
 
         start_datetime = datetime.utcfromtimestamp(start_time)
+        end_datetime = datetime.utcfromtimestamp(end_time)
         thread_info_list.append({
             "name": "tailing-profiler",
             "thread": Thread(
             target=MongoQueryRecorder._tail_to_queue,
             args=(self.get_profiler_tailor(start_datetime),
-                  MongoQueryRecorder.PROFILER, doc_queue, state))
+                  MongoQueryRecorder.PROFILER, doc_queue, state, end_datetime))
         })
 
         for thread_info in thread_info_list:
@@ -279,10 +289,11 @@ class MongoQueryRecorder(object):
             time.sleep(5)
         MongoQueryRecorder._report_status(state)
 
-        state.processing = False
+        state.timeout = True
         for thread_info in thread_info_list:
             utils.LOG.info(
-                "Waiting for thread: %s to finish", thread_info["name"])
+                "Time to stop, waiting for thread: %s to finish",
+                thread_info["name"])
             thread = thread_info["thread"]
             name = thread_info["name"]
             # Idempotently wait for thread
