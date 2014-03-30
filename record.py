@@ -149,7 +149,8 @@ class MongoQueryRecorder(object):
     @staticmethod
     def _process_doc_queue(doc_queue, files, state):
         """Writes the incoming docs to the corresponding files"""
-        while not state.timeout:
+        # Keep waiting if any of the tailor thread is still at work.
+        while any(s.alive for s in state.tailor_states):
             try:
                 index, doc = doc_queue.get(block=True, timeout=1)
                 state.tailor_states[index].entries_written += 1
@@ -301,7 +302,7 @@ class MongoQueryRecorder(object):
         timer.setDaemon(True)
         timer.start()
 
-        # Processing for a time range
+        # Wait...
         while all(s.alive for s in state.tailor_states) \
                 and (utils.now_in_utc_secs() < end_time) \
                 and not self.force_quit:
