@@ -114,7 +114,8 @@ class MongoQueryRecorder(object):
             s = utils.EmptyClass()
             s.entries_received = 0
             s. entries_written = 0
-            s. alive = True
+            s.alive = True
+            s.last_ts = None
             return s
 
         def __init__(self):
@@ -183,13 +184,16 @@ class MongoQueryRecorder(object):
         """report current processing status"""
         msgs = []
         for idx, source in enumerate(["<oplog>", "<profiler>"]):
-            msg = "\n\t{0}: received {1} entries, {2} of them were written". \
-                  format(source,
-                         state.tailor_states[idx].entries_received,
-                         state.tailor_states[idx].entries_written)
+            tailor_state = state.tailor_states[idx]
+            msg = "\n\t{0}: received {1} entries, {2} of them were written, "\
+                  "last received entry ts: {3}" .format(
+                      source,
+                      tailor_state.entries_received,
+                      tailor_state.entries_written,
+                      str(tailor_state.last_ts))
             msgs.append(msg)
 
-        utils.LOG.info("; ".join(msgs))
+        utils.LOG.info("".join(msgs))
 
     def get_oplog_tailor(self, start_time):
         """Start recording the oplog entries starting from now.
