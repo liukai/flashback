@@ -9,9 +9,9 @@ import config
 import constants
 import pickle
 import Queue
-import threading
 import time
 import utils
+import signal
 
 
 def _test_final_output(filename):
@@ -129,6 +129,7 @@ class MongoQueryRecorder(object):
 
     def __init__(self, db_config):
         self.config = db_config
+        self.force_quit = False
         # sanitize the options
         if self.config["target_collections"] is not None:
             self.config["target_collections"] = set(
@@ -235,6 +236,10 @@ class MongoQueryRecorder(object):
 
         return utils.create_tailing_cursor(profiler_collection, criteria)
 
+    def force_quit_all(self):
+        """Gracefully quite all recording activities"""
+        self.force_quit = True
+
     def record(self):
         """record the activities in the multithreading way"""
         start_time = utils.now_in_utc_secs()
@@ -259,37 +264,47 @@ class MongoQueryRecorder(object):
                 target=MongoQueryRecorder._process_doc_queue,
                 args=(doc_queue, files, state))
         })
+        tailor = self.get_oplog_tailor(Timestamp(start_time, 0))
         thread_info_list.append({
             "name": "tailing-oplogs",
+            "on_close": lambda: self.oplog_client.kill_cursors([tailor.cursor_id]),
             "thread": Thread(
-            target=MongoQueryRecorder._tail_to_queue,
-            args=(self.get_oplog_tailor(Timestamp(start_time, 0)),
-                  MongoQueryRecorder.OPLOG, doc_queue, state,
-                  Timestamp(end_time, 0)))
+                target=MongoQueryRecorder._tail_to_queue,
+                args=(tailor, MongoQueryRecorder.OPLOG, doc_queue, state,
+                      Timestamp(end_time, 0)))
         })
 
         start_datetime = datetime.utcfromtimestamp(start_time)
         end_datetime = datetime.utcfromtimestamp(end_time)
+        tailor = self.get_profiler_tailor(start_datetime)
         thread_info_list.append({
             "name": "tailing-profiler",
+            "on_close": lambda: self.profiler_client.kill_cursors([tailor.cursor_id]),
             "thread": Thread(
-            target=MongoQueryRecorder._tail_to_queue,
-            args=(self.get_profiler_tailor(start_datetime),
-                  MongoQueryRecorder.PROFILER, doc_queue, state, end_datetime))
+                target=MongoQueryRecorder._tail_to_queue,
+                args=(tailor, MongoQueryRecorder.PROFILER, doc_queue, state,
+                      end_datetime))
         })
 
         for thread_info in thread_info_list:
             utils.LOG.info("Starting thread: %s", thread_info["name"])
             thread_info["thread"].setDaemon(True)
             thread_info["thread"].start()
-        MongoQueryRecorder._report_status(state)
-        timer_thread = threading.Timer(5, MongoQueryRecorder._report_status,
-                                       [state])
-        timer_thread.start()
+        timer_stop = False
+
+        def async_report_status():
+            while not timer_stop:
+                MongoQueryRecorder._report_status(state)
+                time.sleep(3)
+            MongoQueryRecorder._report_status(state)
+        timer = Thread(target=async_report_status)
+        timer.setDaemon(True)
+        timer.start()
 
         # Processing for a time range
         while all(s.alive for s in state.tailor_states) \
-                and (utils.now_in_utc_secs() < end_time):
+                and (utils.now_in_utc_secs() < end_time) \
+                and not self.force_quit:
             time.sleep(1)
 
         state.timeout = True
@@ -304,6 +319,8 @@ class MongoQueryRecorder(object):
             while thread.is_alive():
                 thread.join(wait_secs)
                 if thread.is_alive():
+                    if self.force_quit and thread_info["on_close"]:
+                        thread_info["on_close"]()
                     utils.LOG.error(
                         "Thread %s didn't exit after %d seconds. Will wait for "
                         "another %d seconds", name, wait_secs, 2 * wait_secs)
@@ -311,8 +328,7 @@ class MongoQueryRecorder(object):
                     thread.join(wait_secs)
                 else:
                     utils.LOG.info("Thread %s exits normally.", name)
-        timer_thread.cancel()
-        MongoQueryRecorder._report_status(state)
+        timer_stop = False
         utils.LOG.info("Preliminary recording completed!")
 
         for f in files:
@@ -328,6 +344,13 @@ def main():
     """Recording the inbound traffic for a database."""
     db_config = config.DB_CONFIG
     recorder = MongoQueryRecorder(db_config)
+
+    def signal_handler(signal, frame):
+        """Handle the Ctrl+C"""
+        print 'Gracefully exiting program...'
+        recorder.force_quit_all()
+    signal.signal(signal.SIGINT, signal_handler)
+
     recorder.record()
     # _test_final_output(db_config["output_file"])
 
