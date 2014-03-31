@@ -4,6 +4,7 @@ import config
 import pickle
 import time
 import pymongo
+import threading
 
 
 def _make_logger():
@@ -65,3 +66,20 @@ def get_start_time(collection):
 class EmptyClass(object):
 
     """Empty class"""
+
+def set_interval(interval):
+    """An decorator that executes the event every n seconds"""
+    def decorator(function):
+        def wrapper(*args, **kwargs):
+            stopped = threading.Event()
+            def loop(): # executed in another thread
+                function(*args, **kwargs)
+                while not stopped.wait(interval): # until stopped
+                    function(*args, **kwargs)
+
+            t = threading.Thread(target=loop)
+            t.daemon = True # stop if the program exits
+            t.start()
+            return stopped
+        return wrapper
+    return decorator

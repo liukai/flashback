@@ -1,4 +1,5 @@
-""" TODO This file serves as an example of """
+""" This file serves as an example of config file. Please copy it to config.py.
+"""
 import logging
 
 DB_CONFIG = {
