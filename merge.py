@@ -39,7 +39,7 @@ def merge_to_final_output(oplog_output_file, profiler_output_file, output_file):
             # Replace the the profiler's insert operation doc with oplog's,
             # but keeping the canonical form of "ts".
             profiler_ts = int(profiler_doc["ts"].strftime("%s"))
-            oplog_ts = oplog_doc["ts"].as_datetime()
+            oplog_ts = oplog_doc["ts"].time
             # only care about the second-level precision.
             # TODO(kailiu) lame enforcement of consistency
             delta = abs(profiler_ts - oplog_ts)
@@ -86,7 +86,7 @@ def main():
     # for the parameters.
     db_config = config.DB_CONFIG
     if len(sys.argv) != 1:
-        params = sys.argv[1:3]
+        params = sys.argv[1:]
         merge_to_final_output(params[0], params[1], params[2])
     else:
         merge_to_final_output(db_config["oplog_output_file"],

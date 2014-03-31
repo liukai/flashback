@@ -237,7 +237,7 @@ class MongoQueryRecorder(object):
             while thread.is_alive():
                 thread.join(wait_secs)
                 if thread.is_alive():
-                    if self.force_quit and worker_info["on_close"]:
+                    if self.force_quit and "on_close" in worker_info:
                         worker_info["on_close"]()
                     utils.LOG.error(
                         "Thread %s didn't exit after %d seconds. Will wait for "
