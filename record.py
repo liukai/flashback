@@ -96,7 +96,7 @@ def complete_insert_ops(oplog_output_file, profiler_output_file, output_file):
             oplog_doc = utils.unpickle(oplog)
             profiler_doc = utils.unpickle(profiler)
 
-    while profiler_doc:
+    while profiler_doc and profiler_doc["op"] != "insert":
         pickle.dump(profiler_doc, output)
         noninserts += 1
         profiler_doc = utils.unpickle(profiler)
