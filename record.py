@@ -26,8 +26,11 @@ def make_ns_selector(database, target_collections):
         return {"$in": ["{0}.{1}".format(database, coll)
                 for coll in target_collections]}
     else:
-        return {"$nin": ["{0}.{1}".format(database, coll)
-                for coll in system_collections]}
+        return {
+            "$regex": r"^{}\.".format(database),
+            "$nin": ["{0}.{1}".format(database, coll)
+                     for coll in system_collections]
+        }
 
 
 class MongoQueryRecorder(object):
@@ -78,6 +81,8 @@ class MongoQueryRecorder(object):
         self.profiler_client = \
             self.oplog_client if oplog_server == profiler_server else \
             MongoClient(profiler_server["host"], profiler_server["port"])
+        utils.LOG.info("oplog server: %s", str(oplog_server))
+        utils.LOG.info("profiling server: %s", str(profiler_server))
 
     @staticmethod
     def _process_doc_queue(doc_queue, files, state):
