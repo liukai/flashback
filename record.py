@@ -107,7 +107,7 @@ class MongoQueryRecorder(object):
             it will sleep for a period of time and then try again.
         """
         tailor_state = state.tailor_states[identifier]
-        while tailor.alive:
+        while tailor.alive and all(s.alive for s in state.tailor_states):
             try:
                 doc = tailor.next()
                 tailor_state.last_ts = doc["ts"]
