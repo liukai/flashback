@@ -1,6 +1,6 @@
 import utils
 import config
-import pickle
+import cPickle
 import sys
 
 
@@ -32,7 +32,7 @@ def merge_to_final_output(oplog_output_file, profiler_output_file, output_file):
             logger.info("processed %d items", noninserts + inserts)
 
         if profiler_doc["op"] != "insert":
-            pickle.dump(profiler_doc, output)
+            cPickle.dump(profiler_doc, output)
             noninserts += 1
             profiler_doc = utils.unpickle(profiler)
         else:
@@ -48,8 +48,8 @@ def merge_to_final_output(oplog_output_file, profiler_output_file, output_file):
                 # not propertly closed.
                 logger.error(
                     "oplog and profiler results are inconsistent `ts`\n"
-                    "  oplog:    %s\n"
-                    "  profiler: %s", str(oplog_doc), str(profiler_doc))
+                    "  oplog:    %d\n"
+                    "  profiler: %d", oplog_ts, profiler_ts)
                 severe_inconsistencies += 1
             elif delta != 0:
                 logger.warn("Slightly inconsistent timestamp\n"
@@ -60,13 +60,13 @@ def merge_to_final_output(oplog_output_file, profiler_output_file, output_file):
             oplog_doc["ts"] = profiler_doc["ts"]
             # make sure "op" is "insert" instead of "i".
             oplog_doc["op"] = profiler_doc["op"]
-            pickle.dump(oplog_doc, output)
+            cPickle.dump(oplog_doc, output)
             inserts += 1
             oplog_doc = utils.unpickle(oplog)
             profiler_doc = utils.unpickle(profiler)
 
     while profiler_doc and profiler_doc["op"] != "insert":
-        pickle.dump(profiler_doc, output)
+        cPickle.dump(profiler_doc, output)
         noninserts += 1
         profiler_doc = utils.unpickle(profiler)
 

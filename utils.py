@@ -1,7 +1,7 @@
 """Globally shared common utilities functions/classes/variables"""
 import logging
 import config
-import pickle
+import cPickle
 import time
 import pymongo
 import threading
@@ -26,7 +26,7 @@ LOG = _make_logger()
 def unpickle(input_file):
     """Safely unpack entry from the file"""
     try:
-        return pickle.load(input_file)
+        return cPickle.load(input_file)
     except EOFError:
         return None
 

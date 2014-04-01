@@ -7,7 +7,7 @@ from pymongo import MongoClient
 from threading import Thread
 import config
 import constants
-import pickle
+import cPickle
 import Queue
 import time
 import utils
@@ -87,7 +87,7 @@ class MongoQueryRecorder(object):
             try:
                 index, doc = doc_queue.get(block=True, timeout=1)
                 state.tailor_states[index].entries_written += 1
-                pickle.dump(doc, files[index])
+                cPickle.dump(doc, files[index])
             except Queue.Empty:
                 # gets nothing after timeout
                 continue
