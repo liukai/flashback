@@ -234,9 +234,9 @@ class MongoQueryRecorder(object):
 
         return workers_info
 
-    def _join_workers(self, workers_info):
+    def _join_workers(self, state, workers_info):
         """Ready to exit all workers"""
-        for worker_info in workers_info:
+        for idx, worker_info in enumerate(workers_info):
             utils.LOG.info(
                 "Time to stop, waiting for thread: %s to finish",
                 worker_info["name"])
@@ -256,6 +256,9 @@ class MongoQueryRecorder(object):
                     thread.join(wait_secs)
                 else:
                     utils.LOG.info("Thread %s exits normally.", name)
+            # TODO dirty!
+            if idx < len(state.tailor_states):
+                state.tailor_states[idx].is_alive = False
 
     @utils.set_interval(3)
     def _periodically_report_status(self, state):
