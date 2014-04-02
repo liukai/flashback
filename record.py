@@ -52,7 +52,8 @@ class MongoQueryRecorder(object):
             s.entries_received = 0
             s. entries_written = 0
             s.alive = True
-            s.last_ts = None
+            s.last_received_ts = None
+            s.last_get_none_ts = None
             return s
 
         def __init__(self):
@@ -115,16 +116,19 @@ class MongoQueryRecorder(object):
         while tailor.alive and all(s.alive for s in state.tailor_states):
             try:
                 doc = tailor.next()
-                tailor_state.last_ts = doc["ts"]
-                if state.timeout and (tailor_state.last_ts is None or
-                                      tailor_state.last_ts >= end_time):
+                tailor_state.last_received_ts = doc["ts"]
+                if state.timeout and tailor_state.last_received_ts >= end_time:
                     break
+
+                if type(tailor_state.last_received_ts) is Timestamp:
+                    tailor_state.last_received_ts.as_datetime()
 
                 doc_queue.put_nowait((identifier, doc))
                 tailor_state.entries_received += 1
             except StopIteration:
                 if state.timeout:
                     break
+                tailor_state.last_get_none_ts = datetime.now()
                 time.sleep(check_duration_secs)
         tailor_state.alive = False
         utils.LOG.info("source #%d: Tailing to queue completed!", identifier)
@@ -135,12 +139,13 @@ class MongoQueryRecorder(object):
         msgs = []
         for idx, source in enumerate(["<oplog>", "<profiler>"]):
             tailor_state = state.tailor_states[idx]
-            msg = "\n\t{0}: received {1} entries, {2} of them were written, "\
-                  "last received entry ts: {3}" .format(
+            msg = "\n\t{}: received {} entries, {} of them were written, "\
+                  "last received entry ts: {}, last get-none ts: {}" .format(
                       source,
                       tailor_state.entries_received,
                       tailor_state.entries_written,
-                      str(tailor_state.last_ts))
+                      str(tailor_state.last_received_ts),
+                      str(tailor_state.last_get_none_ts))
             msgs.append(msg)
 
         utils.LOG.info("".join(msgs))
