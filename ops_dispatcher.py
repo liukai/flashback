@@ -37,7 +37,8 @@ class OpsDispatcher(object):
         stats.get_ops_time = datetime.timedelta()
         return stats
 
-    def __init__(self, ops_sources, pre_fetching=5000, min_batch_size=1000):
+    def __init__(self, ops_sources, start_time=None, end_time=None,
+                 pre_fetching=5000, min_batch_size=1000):
         """
         @params ops_sources: we can dispatch ops from multiple sources, where
             all ops will be issued by the order of their timestamps. Each source
@@ -51,6 +52,8 @@ class OpsDispatcher(object):
         self.all_loaded = True
         self.min_batch_size = min_batch_size
         self.loading_stats = OpsDispatcher.make_loading_stats()
+        self.start_time = start_time
+        self.end_time = end_time
 
     def get_ops(self, get_ops_stats, timeout=1):
         """returns a generator provides a thread-safe way to fetch the sequences
@@ -77,11 +80,19 @@ class OpsDispatcher(object):
         self.all_loaded = False
         utils.LOG.info("Starting to grab the ops")
 
+        if self.start_time:
+            # Fast forward to the first time that >= `self.start_time`
+            for op in self.ops:
+                if op["ts"] >= self.start_time:
+                    self.queue.put(op)
+                    break
+
         # Pre-fetching ops to avoid unnecessary initial waiting.
         self._load_batch(self.pre_fetching)
         utils.LOG.info("Pre-fetched %d ops", self.pre_fetching)
 
         self.loading_thread = threading.Thread(target=self._fill_queue)
+        self.loading_thread.setDaemon(True)
         self.loading_thread.start()
 
     def stop(self):
@@ -95,6 +106,8 @@ class OpsDispatcher(object):
     def _load_batch(self, batch_size):
         loaded = 0
         for op in self.ops:
+            if self.end_time and op["ts"] >= self.end_time:
+                break
             loaded += 1
             self.queue.put(op)
             if loaded == self.pre_fetching:
@@ -155,13 +168,14 @@ def test():
 
     def check_grabbed_ops():
         def grab_ops(idx, stats):
-            stats = OpsDispatcher.make_get_ops_stats()
             ops = list(op for op in dispatch.get_ops(stats) if op != None)
-            pprint.pprint(stats.__dict__)
             # utils.LOG.info("Thread #%d got %d ops.", idx, len(ops))
             # all fetched results are sorted
             assert all(
-                ops[i]["ts"] <= ops[i + 1]["ts"] for i in xrange(len(ops) - 1)
+                ops[i]["ts"] <= ops[i + 1]["ts"] and
+                    ops[i]["ts"] >= dispatch.start_time and
+                    ops[i]["ts"] <= dispatch.end_time
+                for i in xrange(len(ops) - 1)
             )
         # kick off multithreads to fetch the ops
         stats_list = [OpsDispatcher.make_get_ops_stats() for i in xrange(5)]
@@ -179,7 +193,9 @@ def test():
             pprint.pprint(stats.__dict__)
 
     sources = make_random_sources()
-    dispatch = OpsDispatcher(sources, pre_fetching=100, min_batch_size=100)
+    dispatch = OpsDispatcher(
+        sources, pre_fetching=1000, min_batch_size=100, start_time=10000,
+        end_time=40000)
 
     dispatch.start()
     consumer = threading.Thread(target=check_grabbed_ops)
