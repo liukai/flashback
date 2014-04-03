@@ -55,7 +55,7 @@ class OpsDispatcher(object):
         self.start_time = start_time
         self.end_time = end_time
 
-    def get_ops(self, get_ops_stats, timeout=1):
+    def get_ops(self, timeout=1):
         """returns a generator provides a thread-safe way to fetch the sequences
         of unprocessed ops.
         @params: timeout decides how long we should wait if we cannot fetch any
@@ -64,14 +64,9 @@ class OpsDispatcher(object):
         """
         while not self.all_loaded:
             try:
-                start_time = datetime.datetime.now()
                 op = self.queue.get(block=True, timeout=timeout)
-                get_ops_stats.num_ops += 1
-                get_ops_stats.get_ops_time += \
-                    datetime.datetime.now() - start_time
                 yield op
             except Queue.Empty:
-                get_ops_stats.num_nones += 1
                 yield None
 
     def start(self):
@@ -167,9 +162,9 @@ def test():
         return sources.__iter__()
 
     def check_grabbed_ops():
-        def grab_ops(idx, stats):
-            ops = list(op for op in dispatch.get_ops(stats) if op != None)
-            # utils.LOG.info("Thread #%d got %d ops.", idx, len(ops))
+        def grab_ops(idx):
+            ops = list(op for op in dispatch.get_ops() if op != None)
+            utils.LOG.info("Thread #%d got %d ops.", idx, len(ops))
             # all fetched results are sorted
             assert all(
                 ops[i]["ts"] <= ops[i + 1]["ts"] and
@@ -178,19 +173,14 @@ def test():
                 for i in xrange(len(ops) - 1)
             )
         # kick off multithreads to fetch the ops
-        stats_list = [OpsDispatcher.make_get_ops_stats() for i in xrange(5)]
         threads = [
-            threading.Thread(target=grab_ops, args=(i, stats_list[i]))
-            for i in xrange(5)
+            threading.Thread(target=grab_ops, args=(i,)) for i in xrange(5)
         ]
         for t in threads:
             t.start()
 
         for t in threads:
             t.join()
-        for idx, stats in enumerate(stats_list):
-            print "Thread", idx
-            pprint.pprint(stats.__dict__)
 
     sources = make_random_sources()
     dispatch = OpsDispatcher(
