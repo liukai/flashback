@@ -289,7 +289,7 @@ class MongoQueryRecorder(object):
 
         state.timeout = True
 
-        self._join_workers(workers_info)
+        self._join_workers(state, workers_info)
         timer_control.set()  # stop status report
         utils.LOG.info("Preliminary recording completed!")
 
