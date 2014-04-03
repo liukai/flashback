@@ -1,7 +1,7 @@
 import cPickle
 
 
-def read_ops_from_file(filename):
+def file_ops_reader(filename):
     """A naive generator that reads ops from file and returns a doc each time
     Note: it ISN'T thread-safe.
     """
