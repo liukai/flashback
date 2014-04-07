@@ -1,9 +1,7 @@
-import time
-import datetime
-import Queue
 import threading
 import utils
 import heapq
+import queue
 
 
 def merged_iterator(ops_sources):
@@ -20,131 +18,72 @@ def merged_iterator(ops_sources):
 
 class OpsDispatcher(object):
 
-    @staticmethod
-    def make_loading_stats():
-        stats = utils.EmptyClass()
-        stats.num_loading_stalls = 0
-        stats.num_loaded_ops = 0
-        stats.loading_ops_time = datetime.timedelta()
-        return stats
-
-    @staticmethod
-    def make_get_ops_stats():
-        stats = utils.EmptyClass()
-        stats.loading_ops_time = datetime.timedelta()
-        stats.num_nones = 0
-        stats.num_ops = 0
-        stats.get_ops_time = datetime.timedelta()
-        return stats
-
     def __init__(self, ops_sources, start_time=None, end_time=None,
-                 pre_fetching=5000, min_batch_size=1000):
+                 batch_size=10000):
         """
         @params ops_sources: we can dispatch ops from multiple sources, where
             all ops will be issued by the order of their timestamps. Each source
             should have iterator/generator like interface.
         """
         self.ops = merged_iterator(ops_sources)
-        self.queue = Queue.Queue()
+        self.queue = None
+        self.batch_size = batch_size
         self.processing = False
-        self.pre_fetching = pre_fetching
-        self.loading_thread = None
-        self.all_loaded = True
-        self.min_batch_size = min_batch_size
-        self.loading_stats = OpsDispatcher.make_loading_stats()
         self.start_time = start_time
         self.end_time = end_time
 
-    def get_ops(self, timeout=1):
-        """returns a generator provides a thread-safe way to fetch the sequences
-        of unprocessed ops.
-        @params: timeout decides how long we should wait if we cannot fetch any
-                 item by then.
-        REQUIRES: start() had been called.
-        """
-        while not self.all_loaded:
-            try:
-                op = self.queue.get(block=True, timeout=timeout)
-                yield op
-            except Queue.Empty:
-                yield None
+    def __iter__(self):
+        assert self.queue is not None
+        for op in iter(self.queue):
+            if op["ts"] > self.end_time:
+                break
+            yield op
 
     def start(self):
         assert not self.processing
         self.processing = True
-        self.all_loaded = False
         utils.LOG.info("Starting to grab the ops")
 
         if self.start_time:
             # Fast forward to the first time that >= `self.start_time`
             for op in self.ops:
                 if op["ts"] >= self.start_time:
-                    self.queue.put(op)
+                    # TODO sacrifice the first valid item.
                     break
-
-        # Pre-fetching ops to avoid unnecessary initial waiting.
-        self._load_batch(self.pre_fetching)
-        utils.LOG.info("Pre-fetched %d ops", self.pre_fetching)
-
-        self.loading_thread = threading.Thread(target=self._fill_queue)
-        self.loading_thread.setDaemon(True)
-        self.loading_thread.start()
+        self.queue = queue.PreloadingQueue(self.ops, self.batch_size)
+        self.report_status()
 
     def stop(self):
         self.processing = False
-        self.join()
+        # TODO Damn, this is not thread safe, but anyway...
+        if self.queue is not None:
+            self.queue.stop()
 
-    def join(self):
-        if self.loading_thread:
-            self.loading_thread.join()
-
-    def _load_batch(self, batch_size):
-        loaded = 0
-        for op in self.ops:
-            if self.end_time and op["ts"] >= self.end_time:
-                break
-            loaded += 1
-            self.queue.put(op)
-            if loaded == self.pre_fetching:
-                break
-        return loaded
-
-    def _fill_queue(self):
+    @utils.set_interval(interval=3, start_immediately=True, exec_on_exit=True)
+    def report_status(self):
         """Keeps monitor and filling the queue size and if it is less than
         `pre_fetching`."""
-        try:
-            while True:
-                # If we've already loaded enough ops, just keep waiting till
-                # the number falls under threshold.
-                continuous_sleeps = 0
-                while self.processing and \
-                        self.queue.qsize() > self.pre_fetching:
-                    time.sleep(0.1)
-                    if continuous_sleeps % 20 == 0:
-                        # To avoid flooding warnings, we only print out the
-                        # message every N seconds.
-                        utils.LOG.warn(
-                            "Stop fetching more ops to the queue for 0.1 sec "
-                            "because there are already %d item in the queue",
-                            self.pre_fetching)
-                    continuous_sleeps += 1
-                    self.loading_stats.num_loading_stalls += 1
-                if not self.processing:
-                    break
-                start_time = datetime.datetime.now()
-                ops_loaded = self._load_batch(max(
-                    self.min_batch_size,
-                    self.pre_fetching - self.queue.qsize()
-                ))
-                self.loading_stats.loading_ops_time += \
-                    (datetime.datetime.now() - start_time)
-                self.loading_stats.num_loaded_ops += ops_loaded
-                if ops_loaded == 0:
-                    break
-        finally:
-            # To make sure the correctness of this class stands true even after
-            # crash.
-            self.all_loaded = True
+        q = self.queue
+        loading_stats = q.loading_stats
+        reading_stats = q.reading_stats
+        qsize = q.active_batch.size
+        if q.next_batch:
+            qsize += q.next_batch.size
+
+        loading_rate = 0
+        if loading_stats.num_items_loaded != 0:
+            loading_rate = loading_stats.num_items_loaded / \
+                loading_stats.total_loading_time.total_seconds()
+
+        utils.LOG.info("Current queue size %d, ops loaded %d, loading time %s, "
+                       "ops read %d, waiting time: %s, rate %d/sec",
+                       qsize, loading_stats.num_items_loaded,
+                       str(loading_stats.total_loading_time),
+                       reading_stats.num_items_read,
+                       str(loading_stats.total_waiting_time),
+                       loading_rate)
+
+# TODO Move this to unit test
 
 
 def test():
@@ -163,13 +102,13 @@ def test():
 
     def check_grabbed_ops():
         def grab_ops(idx):
-            ops = list(op for op in dispatch.get_ops() if op != None)
+            ops = list(op for op in iter(dispatch) if op != None)
             utils.LOG.info("Thread #%d got %d ops.", idx, len(ops))
             # all fetched results are sorted
             assert all(
                 ops[i]["ts"] <= ops[i + 1]["ts"] and
-                    ops[i]["ts"] >= dispatch.start_time and
-                    ops[i]["ts"] <= dispatch.end_time
+                ops[i]["ts"] >= dispatch.start_time and
+                ops[i]["ts"] <= dispatch.end_time
                 for i in xrange(len(ops) - 1)
             )
         # kick off multithreads to fetch the ops
@@ -184,15 +123,12 @@ def test():
 
     sources = make_random_sources()
     dispatch = OpsDispatcher(
-        sources, pre_fetching=1000, min_batch_size=100, start_time=10000,
-        end_time=40000)
+        sources, start_time=10000, end_time=40000, batch_size=100)
 
     dispatch.start()
     consumer = threading.Thread(target=check_grabbed_ops)
     consumer.start()
-    dispatch.join()
     consumer.join()
-    pprint.pprint(dispatch.loading_stats.__dict__)
 
 if __name__ == '__main__':
     test()
