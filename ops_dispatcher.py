@@ -66,7 +66,7 @@ class OpsDispatcher(object):
         q = self.queue
         loading_stats = q.loading_stats
         reading_stats = q.reading_stats
-        qsize = q.active_batch.size
+        qsize = q.active_batch.size - q.active_batch.pos
         if q.next_batch:
             qsize += q.next_batch.size
 
@@ -76,11 +76,13 @@ class OpsDispatcher(object):
                 loading_stats.total_loading_time.total_seconds()
 
         utils.LOG.info("Current queue size %d, ops loaded %d, loading time %s, "
-                       "ops read %d, waiting time: %s, rate %d/sec",
+                       "ops read %d, waiting time: %s, read-block time: %s, "
+                       "rate %d/sec",
                        qsize, loading_stats.num_items_loaded,
                        str(loading_stats.total_loading_time),
                        reading_stats.num_items_read,
                        str(loading_stats.total_waiting_time),
+                       str(reading_stats.total_waiting_time),
                        loading_rate)
 
 # TODO Move this to unit test

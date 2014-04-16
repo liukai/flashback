@@ -1,7 +1,7 @@
 from pymongo.errors import OperationFailure
-from threading import Thread
+from Queue import Empty
+import multiprocessing
 import utils
-import time
 
 ALL_OP_TYPES = set([
     "insert",
@@ -45,122 +45,60 @@ SUPPORTED_OP_TYPES = {
 }
 
 
-def make_op_stats():
-    stats = utils.EmptyClass()
-    stats.op_counts = dict.fromkeys(ALL_OP_TYPES, 0)
-    stats.failed_ops = dict.fromkeys(ALL_OP_TYPES, 0)
-    stats.slow_ops = dict.fromkeys(ALL_OP_TYPES, 0)
-    stats.get_none = 0
-    stats.latency_buckets = [0] * 1000
-
-    return stats
-
-
 def parse_namespace(ns):
     """the "ns" contains database name and collection name, concatenated by "."
     """
     return ns.split('.', 1)
 
 
-def exec_single_op(mongo_client, op, op_stats):
+def exec_single_op(mongo_client, op):
     op_type = op["op"]
     if op_type not in SUPPORTED_OP_TYPES:
-        return
+        return True
 
-    op_stats.op_counts[op_type] += 1
     try:
         db_name, coll_name = parse_namespace(op["ns"])
     except ValueError:
         utils.LOG.error("Unknown namespace: %s", op["ns"])
-        return
+        return False
 
     try:
         db = mongo_client[db_name]
         SUPPORTED_OP_TYPES[op_type](db, coll_name, op)
     except OperationFailure:
-        op_stats.failed_ops[op_type] += 1
+        return False
+    return True
 
 
-@utils.set_interval(10, start_immediately=False, exec_on_exit=True)
-def report_exec_ops_status(stats_list, final_stats, time_info):
-    def merge_counts(base_count, addition_count):
-        for key in ALL_OP_TYPES:
-            base_count[key] += addition_count[key]
+def parallel_exec_ops(mongo_client, queue, worker_num, should_stop,
+                      all_ops_loaded):
+    def exec_ops(mongo_client, queue, total_ops, failed_ops, should_stop,
+                 all_ops_loaded):
+        while not should_stop.value and \
+            (not all_ops_loaded.value or queue.qsize() > 0):
+            try:
+                op = queue.get(timeout=1)
+                total_ops.value += 1
+                if not exec_single_op(mongo_client, op):
+                    failed_ops.value += 1
+            except Empty:
+                pass
 
-    def update_stats(base, addition):
-        merge_counts(base.op_counts, addition.op_counts)
-        merge_counts(base.failed_ops, addition.failed_ops)
-        merge_counts(base.slow_ops, addition.slow_ops)
+    worker_total_ops = []
+    worker_failed_ops = []
+    workers = []
 
-    def log_subtype_message(name, op_type, op_counts, failed_ops, slow_ops,
-                            seconds):
-        template = "[%s-%s] total ops: %d, failed ops: %d, slow ops: %d, "
-        utils.LOG.info(
-            template, name, op_type, op_counts, failed_ops, slow_ops)
+    for dummy_idx in xrange(worker_num):
+        total_ops = multiprocessing.Value('i', 0)
+        failed_ops = multiprocessing.Value('i', 0)
+        worker = multiprocessing.Process(
+            target=exec_ops,
+            args=(mongo_client, queue, total_ops, failed_ops, should_stop,
+                  all_ops_loaded))
+        worker.daemon = True
+        worker.start()
 
-    def log_total_message(name, op_type, op_counts, failed_ops, slow_ops,
-                          get_none, seconds):
-        template = "[%s-%s] total ops: %d, failed ops: %d, slow ops: %d, " \
-                   "get-none: %d, ops/sec: %.2f"
-        utils.LOG.info(template, name, op_type, op_counts, failed_ops,
-                       slow_ops, get_none, float(op_counts) / seconds)
-
-    now = time.time()
-    total_time = now - time_info["epoch"]
-    interval_time = now - time_info["last_epoch"]
-    time_info["last_epoch"] = now
-
-    interval_stats = make_op_stats()
-    for idx, stats in enumerate(stats_list):
-        stats_list[idx] = make_op_stats()
-        update_stats(interval_stats, stats)
-
-    update_stats(final_stats, interval_stats)
-    stats_list = (("LAST-N-SECS", interval_stats, interval_time),
-                  ("TOTAL", final_stats, total_time))
-    for name, stats, timespan in stats_list:
-        for op_type in ALL_OP_TYPES:
-            log_subtype_message(name, op_type, stats.op_counts[op_type],
-                                stats.failed_ops[
-                                op_type], stats.slow_ops[op_type],
-                                interval_time)
-        total_ops = sum(stats.op_counts[op_type] for op_type in ALL_OP_TYPES)
-        total_failed_ops = sum(stats.failed_ops[op_type]
-                               for op_type in ALL_OP_TYPES)
-        total_slow_ops = sum(stats.slow_ops[op_type]
-                             for op_type in ALL_OP_TYPES)
-        log_total_message(
-            name, "total", total_ops, total_failed_ops, total_slow_ops,
-            stats.get_none, timespan)
-
-    return final_stats
-
-
-def parallel_exec_ops(mongo_client, ops_list):
-    """
-    REQUIRED: ops is the iterator or generator that can be safely accessed by
-              multiple threads.
-    """
-    def exec_ops(mongo_client, idx):
-        for op in ops_list[idx]:
-            if op is None:
-                stats_list[idx].get_none += 1
-                continue
-            exec_single_op(mongo_client, op, stats_list[idx])
-
-    threads = []
-    stats_list = []
-    final_stats = make_op_stats()
-    now = time.time()
-    stop_status_report = report_exec_ops_status(
-        stats_list, final_stats, {"epoch": now, "last_epoch": now}
-    )
-    for idx in xrange(len(ops_list)):
-        stats_list.append(make_op_stats())
-        threads.append(Thread(target=exec_ops, args=(mongo_client, idx)))
-        threads[-1].setDaemon(True)
-        threads[-1].start()
-
-    for t in threads:
-        t.join()
-    stop_status_report.set()
+        workers.append(worker)
+        worker_total_ops.append(total_ops)
+        worker_failed_ops.append(failed_ops)
+    return workers, worker_total_ops, worker_failed_ops
