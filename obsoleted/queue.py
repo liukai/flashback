@@ -72,16 +72,16 @@ class PreloadingQueue(object):
                 assert self.active_batch.pos == self.active_batch.size
                 # wait for next batch to be loaded
 
-                start_time = datetime.now()
                 # TODO this is "the" most hard to read condition!
                 # Explain the shit!
                 while self.active_batch.size != 0 \
                     and self.active_batch.pos >= self.active_batch.size \
                     and self.next_batch is None \
                     and not self.should_stop:
+                    start_time = datetime.now()
                     self.queue_not_empty.wait(1)
-                self.reading_stats.total_waiting_time += \
-                    datetime.now() - start_time
+                    self.reading_stats.total_waiting_time += \
+                        datetime.now() - start_time
 
                 # if the loading thread has already loaded everything,
                 # self.should_stop will be set to True.
@@ -103,6 +103,7 @@ class PreloadingQueue(object):
 
             assert self.active_batch.size > 0
             item = self.active_batch.items[self.active_batch.pos]
+            self.active_batch.items[self.active_batch.pos] = None
             self.active_batch.pos += 1
             self.reading_stats.num_items_read += 1
             return item
@@ -121,16 +122,19 @@ class PreloadingQueue(object):
         return gen_dequeue()
 
     def _make_loaded_batch(self):
+        utils.LOG.info("current log id %d", threading.current_thread(). ident)
         start_time = datetime.now()
         batch = PreloadingQueue.make_batch(self.max_batch_size)
+        utils.LOG.info("start loading...")
         for item in self.source:
             batch.items[batch.size] = item
             batch.size += 1
-            self.loading_stats.num_items_loaded += 1
 
             if batch.size == self.max_batch_size:
                 break
-        self.loading_stats.total_loading_time += datetime.now() - start_time
+        utils.LOG.info("finished loading %d items", batch.size)
+        self.loading_stats.num_items_loaded += batch.size
+        self.loading_stats.total_loading_time += (datetime.now() - start_time)
 
         return batch
 
@@ -141,11 +145,11 @@ class PreloadingQueue(object):
             while True:
                 self.lock.acquire()
 
-                start_time = datetime.now()
                 while self.next_batch is not None and not self.should_stop:
+                    start_time = datetime.now()
                     self.ok_to_load_next_batch.wait(1)
-                self.loading_stats.total_waiting_time = \
-                    datetime.now() - start_time
+                    self.loading_stats.total_waiting_time += \
+                        datetime.now() - start_time
 
                 self.lock.release()
                 if self.should_stop:
