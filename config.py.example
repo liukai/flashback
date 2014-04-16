@@ -10,6 +10,20 @@ DB_CONFIG = {
     # skip collection `system.profile`, even if it has been explicit
     # specified).
     "target_collections": [],
+    # -The `targets` field follows the the format:
+    # -    "targets": {
+    # -        "database1": { "coll1", "coll2"} # we are interested collections
+    # -                                         # "coll1"and "coll2" in
+    # -                                         # "database1",
+    # -        "database2": {} # we are interested in all collections in
+    # -                        # "database2"
+    # -    }
+    # -OR:
+    # -    "targets": {}  # interested in all collection in all databases
+    #
+    # -Please note that we will always exclude 'local' database and all "system"
+    # -collections.
+    "targets": {},
     "oplog_server": {
         "host": "localhost",
         "port": 27017,
@@ -18,10 +32,14 @@ DB_CONFIG = {
         "host": "localhost",
         "port": 27017,
     },
+    "export_collection_server": {
+        "host": "localhost",
+        "port": 27017,
+    },
     "oplog_output_file": "./OPLOG_OUTPUT",
     "profiler_output_file": "./PROFILER_OUTPUT",
     "output_file": "./OUTPUT",
-    "duration_secs": 30
+    "duration_secs": 10
 }
 
 APP_CONFIG = {
