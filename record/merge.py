@@ -2,6 +2,40 @@ import utils
 import config
 import cPickle
 import sys
+from bson.json_util import dumps
+
+
+def dump_op(output, op):
+    class DictionaryCopier(object):
+
+        """Simple tool for copy the fields from source dict on demand"""
+
+        def __init__(self, source):
+            self.src = source
+            self.dest = {}
+
+        def copy_fields(self, *fields):
+            for field in fields:
+                if field in self.src:
+                    self.dest[field] = self[field]
+
+    copier = DictionaryCopier(op)
+    copier.copy_fields(["ts", "ns", "ns"])
+    op_type = op["op"]
+
+    # handpick some essential fields to execute.
+    if op_type == "query":
+        copier.copy_fields("query", "ntoskip", "ntoreturn")
+    elif op_type == "insert":
+        copier.copy_fields("o")
+    elif op_type == "update":
+        copier.copy_fields("updateobj", "query")
+    elif op_type == "remove":
+        copier.copy_fields("query")
+    elif op_type == "command":
+        copier.copy_fields("command")
+
+    output.write(dumps(copier.dest))
 
 
 def merge_to_final_output(oplog_output_file, profiler_output_file, output_file):
@@ -32,7 +66,7 @@ def merge_to_final_output(oplog_output_file, profiler_output_file, output_file):
             logger.info("processed %d items", noninserts + inserts)
 
         if profiler_doc["op"] != "insert":
-            cPickle.dump(profiler_doc, output)
+            dump_op(output, profiler_doc)
             noninserts += 1
             profiler_doc = utils.unpickle(profiler)
         else:
@@ -41,7 +75,7 @@ def merge_to_final_output(oplog_output_file, profiler_output_file, output_file):
             profiler_ts = int(profiler_doc["ts"].strftime("%s"))
             oplog_ts = oplog_doc["ts"].time
             # only care about the second-level precision.
-            # TODO(kailiu) lame enforcement of consistency
+            # This is a lame enforcement of consistency
             delta = abs(profiler_ts - oplog_ts)
             if delta > 3:
                 # TODO strictly speaking, this ain't good since the files are
@@ -60,6 +94,7 @@ def merge_to_final_output(oplog_output_file, profiler_output_file, output_file):
             oplog_doc["ts"] = profiler_doc["ts"]
             # make sure "op" is "insert" instead of "i".
             oplog_doc["op"] = profiler_doc["op"]
+            dump_op(output, )
             cPickle.dump(oplog_doc, output)
             inserts += 1
             oplog_doc = utils.unpickle(oplog)
