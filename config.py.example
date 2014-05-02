@@ -23,7 +23,6 @@ DB_CONFIG = {
     #
     # -Please note that we will always exclude 'local' database and all "system"
     # -collections.
-    "targets": {},
     "oplog_server": {
         "host": "localhost",
         "port": 27017,
