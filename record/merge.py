@@ -1,6 +1,6 @@
 import utils
 import config
-import cPickle
+import calendar
 import sys
 from bson.json_util import dumps
 
@@ -17,10 +17,10 @@ def dump_op(output, op):
         def copy_fields(self, *fields):
             for field in fields:
                 if field in self.src:
-                    self.dest[field] = self[field]
+                    self.dest[field] = self.src[field]
 
     copier = DictionaryCopier(op)
-    copier.copy_fields(["ts", "ns", "ns"])
+    copier.copy_fields("ts", "ns", "ns")
     op_type = op["op"]
 
     # handpick some essential fields to execute.
@@ -36,6 +36,7 @@ def dump_op(output, op):
         copier.copy_fields("command")
 
     output.write(dumps(copier.dest))
+    output.write("\n")
 
 
 def merge_to_final_output(oplog_output_file, profiler_output_file, output_file):
@@ -72,7 +73,7 @@ def merge_to_final_output(oplog_output_file, profiler_output_file, output_file):
         else:
             # Replace the the profiler's insert operation doc with oplog's,
             # but keeping the canonical form of "ts".
-            profiler_ts = int(profiler_doc["ts"].strftime("%s"))
+            profiler_ts = calendar.timegm(profiler_doc["ts"].timetuple())
             oplog_ts = oplog_doc["ts"].time
             # only care about the second-level precision.
             # This is a lame enforcement of consistency
@@ -94,14 +95,13 @@ def merge_to_final_output(oplog_output_file, profiler_output_file, output_file):
             oplog_doc["ts"] = profiler_doc["ts"]
             # make sure "op" is "insert" instead of "i".
             oplog_doc["op"] = profiler_doc["op"]
-            dump_op(output, )
-            cPickle.dump(oplog_doc, output)
+            dump_op(output, oplog_doc)
             inserts += 1
             oplog_doc = utils.unpickle(oplog)
             profiler_doc = utils.unpickle(profiler)
 
     while profiler_doc and profiler_doc["op"] != "insert":
-        cPickle.dump(profiler_doc, output)
+        dump_op(output, profiler_doc)
         noninserts += 1
         profiler_doc = utils.unpickle(profiler)
 
