@@ -51,9 +51,9 @@ def now_in_utc_secs():
 def create_tailing_cursor(collection, criteria):
     """Create a cursor that constantly tail the latest documents from the
        database"""
-    tailor = collection.find(
+    tailer = collection.find(
         criteria, slave_okay=True, tailable=True, await_data=False)
-    return tailor
+    return tailer
 
 
 def get_start_time(collection):
