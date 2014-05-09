@@ -33,6 +33,38 @@ def make_ns_selector(database, target_collections):
         }
 
 
+def tail_to_queue(tailor, identifier, doc_queue, state, end_time,
+                  check_duration_secs=1):
+    """Accepts a tailing cursor and serialize the retrieved documents to a
+    fifo queue
+    @param identifier: when passing the retrieved document to the queue, we
+        will attach a unique identifier that allows the queue consumers to
+        process different sources of documents accordingly.
+    @param check_duration_secs: if we cannot retrieve the latest document,
+        it will sleep for a period of time and then try again.
+    """
+    tailor_state = state.tailor_states[identifier]
+    while tailor.alive and all(s.alive for s in state.tailor_states):
+        try:
+            doc = tailor.next()
+            tailor_state.last_received_ts = doc["ts"]
+            if state.timeout and tailor_state.last_received_ts >= end_time:
+                break
+
+            if type(tailor_state.last_received_ts) is Timestamp:
+                tailor_state.last_received_ts.as_datetime()
+
+            doc_queue.put_nowait((identifier, doc))
+            tailor_state.entries_received += 1
+        except StopIteration:
+            if state.timeout:
+                break
+            tailor_state.last_get_none_ts = datetime.now()
+            time.sleep(check_duration_secs)
+    tailor_state.alive = False
+    utils.LOG.info("source #%d: Tailing to queue completed!", identifier)
+
+
 class MongoQueryRecorder(object):
 
     """Record MongoDB database's activities by polling the oplog and profiler
@@ -100,38 +132,6 @@ class MongoQueryRecorder(object):
         for f in files:
             f.flush()
         utils.LOG.info("All received docs are processed!")
-
-    @staticmethod
-    def _tail_to_queue(tailor, identifier, doc_queue, state, end_time,
-                       check_duration_secs=1):
-        """Accepts a tailing cursor and serialize the retrieved documents to a
-        fifo queue
-        @param identifier: when passing the retrieved document to the queue, we
-            will attach a unique identifier that allows the queue consumers to
-            process different sources of documents accordingly.
-        @param check_duration_secs: if we cannot retrieve the latest document,
-            it will sleep for a period of time and then try again.
-        """
-        tailor_state = state.tailor_states[identifier]
-        while tailor.alive and all(s.alive for s in state.tailor_states):
-            try:
-                doc = tailor.next()
-                tailor_state.last_received_ts = doc["ts"]
-                if state.timeout and tailor_state.last_received_ts >= end_time:
-                    break
-
-                if type(tailor_state.last_received_ts) is Timestamp:
-                    tailor_state.last_received_ts.as_datetime()
-
-                doc_queue.put_nowait((identifier, doc))
-                tailor_state.entries_received += 1
-            except StopIteration:
-                if state.timeout:
-                    break
-                tailor_state.last_get_none_ts = datetime.now()
-                time.sleep(check_duration_secs)
-        tailor_state.alive = False
-        utils.LOG.info("source #%d: Tailing to queue completed!", identifier)
 
     @staticmethod
     def _report_status(state):
@@ -208,7 +208,7 @@ class MongoQueryRecorder(object):
             "on_close":
             lambda: self.oplog_client.kill_cursors([oplog_cursor_id]),
             "thread": Thread(
-                target=MongoQueryRecorder._tail_to_queue,
+                target=tail_to_queue,
                 args=(tailor, MongoQueryRecorder.OPLOG, doc_queue, state,
                       Timestamp(end_utc_secs, 0)))
         })
@@ -222,7 +222,7 @@ class MongoQueryRecorder(object):
             "on_close":
             lambda: self.profiler_client.kill_cursors([profiler_cursor_id]),
             "thread": Thread(
-                target=MongoQueryRecorder._tail_to_queue,
+                target=tail_to_queue,
                 args=(tailor, MongoQueryRecorder.PROFILER, doc_queue, state,
                       end_datetime))
         })
