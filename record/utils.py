@@ -5,7 +5,7 @@ import cPickle
 import time
 import pymongo
 import threading
-import datetime
+import constants
 
 
 def _make_logger():
@@ -90,3 +90,50 @@ def set_interval(interval, start_immediately=True, exec_on_exit=True):
             return stopped
         return wrapper
     return decorator
+
+
+def make_ns_selector(database, target_collections):
+    system_collections = \
+        set([constants.PROFILER_COLLECTION, constants.INDEX_COLLECTION])
+
+    if target_collections is not None:
+        target_collections -= system_collections
+
+    if target_collections is not None and len(target_collections) > 0:
+        return {"$in": ["{0}.{1}".format(database, coll)
+                for coll in target_collections]}
+    else:
+        return {
+            "$regex": r"^{}\.".format(database),
+            "$nin": ["{0}.{1}".format(database, coll)
+                     for coll in system_collections]
+        }
+
+
+def get_oplog_tailer(oplog_client, types, target_db, target_colls, start_time):
+    """Start recording the oplog entries starting from now.
+    We only care about "insert" operations since all other queries will
+    be captured by mongodb oplog collection.
+
+    REQUIRED: the specific mongodb database has enabled profiling.
+    """
+    oplog_collection = \
+        oplog_client[constants.LOCAL_DB][constants.OPLOG_COLLECTION]
+    criteria = {
+        "op": {"$in": types},
+        "ts": {"$gte": start_time},
+        "ns": make_ns_selector(target_db, target_colls)
+    }
+
+    return create_tailing_cursor(oplog_collection, criteria)
+
+
+def get_profiler_tailer(client, target_db, target_colls, start_time):
+    """Start recording the profiler entries"""
+    profiler_collection = client[target_db][constants.PROFILER_COLLECTION]
+    criteria = {
+        "ns": make_ns_selector(target_db, target_colls),
+        "ts": {"$gte": start_time}
+    }
+
+    return create_tailing_cursor(profiler_collection, criteria)

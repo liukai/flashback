@@ -6,31 +6,12 @@ from datetime import datetime
 from pymongo import MongoClient
 from threading import Thread
 import config
-import constants
 import cPickle
 import Queue
 import time
 import utils
 import signal
 import merge
-
-
-def make_ns_selector(database, target_collections):
-    system_collections = \
-        set([constants.PROFILER_COLLECTION, constants.INDEX_COLLECTION])
-
-    if target_collections is not None:
-        target_collections -= system_collections
-
-    if target_collections is not None and len(target_collections) > 0:
-        return {"$in": ["{0}.{1}".format(database, coll)
-                for coll in target_collections]}
-    else:
-        return {
-            "$regex": r"^{}\.".format(database),
-            "$nin": ["{0}.{1}".format(database, coll)
-                     for coll in system_collections]
-        }
 
 
 def tail_to_queue(tailer, identifier, doc_queue, state, end_time,
@@ -150,37 +131,6 @@ class MongoQueryRecorder(object):
 
         utils.LOG.info("".join(msgs))
 
-    def get_oplog_tailer(self, start_time):
-        """Start recording the oplog entries starting from now.
-        We only care about "insert" operations since all other queries will
-        be captured by mongodb profiler.
-
-        REQUIRED: the specific mongodb database has enabled profiling.
-        """
-        oplog_collection = \
-            self.oplog_client[constants.LOCAL_DB][constants.OPLOG_COLLECTION]
-        criteria = {
-            "op": "i",
-            "ts": {"$gte": start_time},
-            "ns": make_ns_selector(self.config["target_database"],
-                                   self.config["target_collections"])
-        }
-
-        return utils.create_tailing_cursor(oplog_collection, criteria)
-
-    def get_profiler_tailer(self, start_time):
-        """Start recording the profiler entries"""
-        profiler_collection = \
-            self.profiler_client[self.config["target_database"]] \
-                                [constants.PROFILER_COLLECTION]
-        criteria = {
-            "ns": make_ns_selector(self.config["target_database"],
-                                   self.config["target_collections"]),
-            "ts": {"$gte": start_time}
-        }
-
-        return utils.create_tailing_cursor(profiler_collection, criteria)
-
     def force_quit_all(self):
         """Gracefully quite all recording activities"""
         self.force_quit = True
@@ -201,7 +151,12 @@ class MongoQueryRecorder(object):
                 target=MongoQueryRecorder._process_doc_queue,
                 args=(doc_queue, files, state))
         })
-        tailer = self.get_oplog_tailer(Timestamp(start_utc_secs, 0))
+        tailer = utils.get_oplog_tailer(self.oplog_client,
+                                        # we are only interested in "insert"
+                                        ["i"],
+                                        self.config["target_database"],
+                                        self.config["target_collections"],
+                                        Timestamp(start_utc_secs, 0))
         oplog_cursor_id = tailer.cursor_id
         workers_info.append({
             "name": "tailing-oplogs",
@@ -215,7 +170,10 @@ class MongoQueryRecorder(object):
 
         start_datetime = datetime.utcfromtimestamp(start_utc_secs)
         end_datetime = datetime.utcfromtimestamp(end_utc_secs)
-        tailer = self.get_profiler_tailer(start_datetime)
+        tailer = utils.get_profiler_tailer(self.profiler_client,
+                                           self.config["target_database"],
+                                           self.config["target_collections"],
+                                           start_datetime)
         profiler_cursor_id = tailer.cursor_id
         workers_info.append({
             "name": "tailing-profiler",
