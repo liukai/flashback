@@ -97,6 +97,7 @@ def make_ns_selector(database, target_collections):
         set([constants.PROFILER_COLLECTION, constants.INDEX_COLLECTION])
 
     if target_collections is not None:
+        target_collections = set(target_collections)
         target_collections -= system_collections
 
     if target_collections is not None and len(target_collections) > 0:
@@ -110,7 +111,8 @@ def make_ns_selector(database, target_collections):
         }
 
 
-def get_oplog_tailer(oplog_client, types, target_db, target_colls, start_time):
+def get_oplog_tailer(oplog_client, types, target_db, target_colls,
+                     start_time=None):
     """Start recording the oplog entries starting from now.
     We only care about "insert" operations since all other queries will
     be captured by mongodb oplog collection.
@@ -121,10 +123,11 @@ def get_oplog_tailer(oplog_client, types, target_db, target_colls, start_time):
         oplog_client[constants.LOCAL_DB][constants.OPLOG_COLLECTION]
     criteria = {
         "op": {"$in": types},
-        "ts": {"$gte": start_time},
         "ns": make_ns_selector(target_db, target_colls)
     }
 
+    if start_time is not None:
+        criteria["ts"] = {"$gte": start_time}
     return create_tailing_cursor(oplog_collection, criteria)
 
 
@@ -137,3 +140,17 @@ def get_profiler_tailer(client, target_db, target_colls, start_time):
     }
 
     return create_tailing_cursor(profiler_collection, criteria)
+
+
+class DictionaryCopier(object):
+
+    """Simple tool for copy the fields from source dict on demand"""
+
+    def __init__(self, source):
+        self.src = source
+        self.dest = {}
+
+    def copy_fields(self, *fields):
+        for field in fields:
+            if field in self.src:
+                self.dest[field] = self.src[field]

@@ -1,3 +1,5 @@
+"""This script allows us to manually merge the results from oplog and profiling
+results."""
 import utils
 import config
 import calendar
@@ -6,21 +8,8 @@ from bson.json_util import dumps
 
 
 def dump_op(output, op):
-    class DictionaryCopier(object):
-
-        """Simple tool for copy the fields from source dict on demand"""
-
-        def __init__(self, source):
-            self.src = source
-            self.dest = {}
-
-        def copy_fields(self, *fields):
-            for field in fields:
-                if field in self.src:
-                    self.dest[field] = self.src[field]
-
-    copier = DictionaryCopier(op)
-    copier.copy_fields("ts", "ns", "ns")
+    copier = utils.DictionaryCopier(op)
+    copier.copy_fields("ts", "ns", "op")
     op_type = op["op"]
 
     # handpick some essential fields to execute.
@@ -48,7 +37,7 @@ def merge_to_final_output(oplog_output_file, profiler_output_file, output_file):
         these documents from mongodb. However we designed this script to be able
         to pull the docs from differnt servers, as a result it's hard to do the
         on-time merge since you cannot determine if some "old" entries will come
-        later. """
+        later."""
     oplog = open(oplog_output_file, "rb")
     profiler = open(profiler_output_file, "rb")
     output = open(output_file, "wb")
