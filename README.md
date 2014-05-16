@@ -2,7 +2,7 @@
 
 Flashback is a MongoDB benchmark framework consisting of a set of scripts that:
 1. records the operations(_ops_) that happens during a stretch of time;
-2. replays the recorded ops [Completed but in an immature status].
+2. replays the recorded ops.
 
 The two parts are not necessarily coupled and can be used independently for different purposes.
 
@@ -25,15 +25,44 @@ NOTE: If the oplog size is huge, fetching the first entry from oplog may take a 
 
 ## Replay
 
-[Currently the replay scripts are having some performnce issues. I wrote a Go version of it but haven't made it public]
+With the ops being recorded, we also have replayer to replay them in differnet ways:
+
+* Replay ops with "best effort", which diligently sends these ops to databases as fast as possible. This style can help us to measure the limits of databases. Please note to reduce the overhead for loading ops, we'll preload the ops to the memory and replay them as fast as possible.
+* Reply ops in accordance to their original timestamps, which allows us to imitate regular traffic.
+
+The replay module is written in Go because Python doesn't do a good job in concurrent cpu intensive tasks.
 
 # How to use it
 
-1. Set MongoDB profiling level to be _2_, meaning capture all the ops.
+## Record
 
-## Example
-TBD
+### Prerequisites
 
-## Dependencies
+* The "record" module is written in python. You'll need to have pymongo, mongodb's python driver, installed.
+* Set MongoDB profiling level to be _2_, which captures all the ops.
+* Run MongoDB in a replica set mode (even there is only one node), which allows us to access the oplog.
 
-* pymongo
+### Configuration
+
+* If you are the first time user, please run `cp config.py.example config.py`.
+* In `config.py`, modify it based on your need. Here are some notes:
+    * We intentionally separate the servers for oplog pulling and profiling results pulling. As a good practice, it's better to pull oplog from secondaries. However profiling results must be pulled from primary server.
+    * `duration_secs` indicates the length for the recording.
+
+### Start Recording
+
+After configuration, please simply run `python record.py`.
+
+## Replay
+
+### Prerequisites
+
+Install `mgo` as it is the mongodb go driver.
+
+### Command
+
+    go run main.go \
+        --host=<hostname:[port]> \
+        --style=[real|max] \
+        --ops_num=N \
+        --threads=THREADS
