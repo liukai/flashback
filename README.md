@@ -63,6 +63,6 @@ Install `mgo` as it is the mongodb go driver.
 
     go run main.go \
         --host=<hostname:[port]> \
-        --style=[real|max] \
+        --style=[real|stress] \
         --ops_num=N \
-        --threads=THREADS
+        --workers=WORKERS
