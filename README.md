@@ -1,6 +1,13 @@
 # What is Flashback
 
-Flashback is a MongoDB benchmark framework consisting of a set of scripts that:
+How can you know how good your MongoDB (or other database with similar interface) performance is? Easy, you can benchmark it. A popular way to solve this problem is to use the benchmark tool to generate the query with random contents under certain random distribution.
+
+But sometimes you don't satisfy the randomly generated queries since you're not confident if how much these queries resemble your real workload.
+
+The difficulity compounds when one MongoDB instance may host totally different types of databases that have their unique and ocmplicated access patterns.
+
+This is why we come up with `Flashback`, a MongoDB benchmark framework that allows us to benchmark with "real" queries. it comprises of a set of scripts that fall into the 2 categories:
+
 1. records the operations(_ops_) that happens during a stretch of time;
 2. replays the recorded ops.
 
