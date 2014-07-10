@@ -1,6 +1,6 @@
 # Moved to [ParsePlatform/flashback](https://github.com/ParsePlatform/flashback)
 
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+--------------------
 
 # What is Flashback
 
