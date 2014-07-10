@@ -1,3 +1,7 @@
+# Moved to [ParsePlatform/flashback](https://github.com/ParsePlatform/flashback)
+
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
 # What is Flashback
 
 How can you know how good your MongoDB (or other databases with similar interface) performance is? Easy, you can benchmark it. A general way to solve this problem is to use the benchmark tool to generate the query with random contents under certain random distribution.
